@@ -1,24 +1,22 @@
 import React, { useMemo, useState, useEffect } from "react";
-import { useQuery, useMutation } from "convex/react";
-import { api } from "../../convex/_generated/api";
-import { Id } from "../../convex/_generated/dataModel";
+import { usePBQuery, pb, type Agent, type Task, type Message, type Activity, type Document } from "../lib/pocketbase";
 import { IconX, IconCheck, IconUser, IconTag, IconMessage, IconClock, IconFileText, IconCopy, IconCalendar, IconArchive, IconPlayerPlay } from "@tabler/icons-react";
 import ReactMarkdown from "react-markdown";
 import { DEFAULT_TENANT_ID } from "../lib/tenant";
 
 interface TaskDetailPanelProps {
-  taskId: Id<"tasks"> | null;
+  taskId: string | null;
   onClose: () => void;
-  onPreviewDocument?: (docId: Id<"documents">) => void;
+  onPreviewDocument?: (docId: string) => void;
 }
 
 const statusColors: Record<string, string> = {
-  inbox: "var(--text-subtle)",
+  inbox: "var(--muted-foreground)",
   assigned: "var(--accent-orange)",
   in_progress: "var(--accent-blue)",
-  review: "var(--text-main)",
+  review: "var(--accent-yellow)",
   done: "var(--accent-green)",
-  archived: "var(--text-subtle)",
+  archived: "var(--muted-foreground)",
 };
 
 const statusLabels: Record<string, string> = {
@@ -31,36 +29,49 @@ const statusLabels: Record<string, string> = {
 };
 
 const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({ taskId, onClose, onPreviewDocument }) => {
-  const tasks = useQuery(api.queries.listTasks, { tenantId: DEFAULT_TENANT_ID });
-  const agents = useQuery(api.queries.listAgents, { tenantId: DEFAULT_TENANT_ID });
-  const resources = useQuery(
-    api.documents.listByTask,
-    taskId ? { taskId, tenantId: DEFAULT_TENANT_ID } : "skip"
-  );
-  const activities = useQuery(
-    api.queries.listActivities,
-    taskId ? { taskId, tenantId: DEFAULT_TENANT_ID } : "skip"
-  );
-  const messages = useQuery(
-    api.queries.listMessages,
-    taskId ? { taskId, tenantId: DEFAULT_TENANT_ID } : "skip"
-  );
+  const tasks = usePBQuery<Task>("tasks", {
+    filter: "tenantId = {:tid}",
+    filterParams: { tid: DEFAULT_TENANT_ID },
+  });
+  const agents = usePBQuery<Agent>("agents", {
+    filter: "tenantId = {:tid}",
+    filterParams: { tid: DEFAULT_TENANT_ID },
+  });
+  const resources = usePBQuery<Document>("documents", taskId ? {
+    filter: "tenantId = {:tid} && taskId = {:taskId}",
+    filterParams: { tid: DEFAULT_TENANT_ID, taskId },
+  } : "skip");
+  const activities = usePBQuery<Activity>("activities", taskId ? {
+    filter: "tenantId = {:tid} && targetId = {:taskId}",
+    filterParams: { tid: DEFAULT_TENANT_ID, taskId },
+    sort: "-created",
+  } : "skip");
+  const rawMessages = usePBQuery<Message>("messages", taskId ? {
+    filter: "tenantId = {:tid} && taskId = {:taskId}",
+    filterParams: { tid: DEFAULT_TENANT_ID, taskId },
+  } : "skip");
 
-  const updateStatus = useMutation(api.tasks.updateStatus);
-  const updateAssignees = useMutation(api.tasks.updateAssignees);
-  const updateTask = useMutation(api.tasks.updateTask);
-  const archiveTask = useMutation(api.tasks.archiveTask);
-  const sendMessage = useMutation(api.messages.send);
-  const createDocument = useMutation(api.documents.create);
-  const linkRun = useMutation(api.tasks.linkRun);
+  // Enrich messages with agent info client-side
+  const messages = useMemo(() => {
+    if (!rawMessages || !agents) return undefined;
+    const agentMap = new Map(agents.map(a => [a.id, a]));
+    return rawMessages.map(msg => {
+      const agent = agentMap.get(msg.fromAgentId);
+      return {
+        ...msg,
+        agentName: agent?.name || "Unknown",
+        agentAvatar: agent?.avatar,
+      };
+    });
+  }, [rawMessages, agents]);
 
-  const task = tasks?.find((t) => t._id === taskId);
-  const currentUserAgent = agents?.find(a => a.name === "Manish");
-  
+  const task = tasks?.find((t) => t.id === taskId);
+  const currentUserAgent = agents?.[0];
+
   const [description, setDescription] = useState("");
   const [isEditingDesc, setIsEditingDesc] = useState(false);
   const [commentText, setCommentText] = useState("");
-  const [selectedAttachmentIds, setSelectedAttachmentIds] = useState<Array<Id<"documents">>>([]);
+  const [selectedAttachmentIds, setSelectedAttachmentIds] = useState<Array<string>>([]);
   const [isAddingDoc, setIsAddingDoc] = useState(false);
   const [newDocTitle, setNewDocTitle] = useState("");
   const [newDocType, setNewDocType] = useState("note");
@@ -74,57 +85,67 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({ taskId, onClose, onPr
   }, [task]);
 
   if (!taskId) return null;
-  if (!task) return null; // Loading or not found
+  if (!task) return null;
 
-  const handleStatusChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+  const handleStatusChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
     if (currentUserAgent) {
-        updateStatus({
-          taskId: task._id,
-          status: e.target.value as any,
-          agentId: currentUserAgent._id,
-          tenantId: DEFAULT_TENANT_ID,
-        });
+      await pb.collection("tasks").update(task.id, {
+        status: e.target.value,
+      });
+      await pb.collection("activities").create({
+        type: "status",
+        message: `changed status to ${e.target.value}`,
+        agentId: currentUserAgent.id,
+        targetId: task.id,
+        tenantId: DEFAULT_TENANT_ID,
+      });
     }
   };
 
-  const handleAssigneeToggle = (agentId: Id<"agents">) => {
+  const handleAssigneeToggle = async (agentId: string) => {
     if (!currentUserAgent) return;
     const currentAssignees = task.assigneeIds || [];
     const isAssigned = currentAssignees.includes(agentId);
-    
+
     let newAssignees;
     if (isAssigned) {
       newAssignees = currentAssignees.filter(id => id !== agentId);
     } else {
       newAssignees = [...currentAssignees, agentId];
     }
-    updateAssignees({
-      taskId: task._id,
+    await pb.collection("tasks").update(task.id, {
       assigneeIds: newAssignees,
-      agentId: currentUserAgent._id,
+    });
+    await pb.collection("activities").create({
+      type: "tasks",
+      message: isAssigned ? `unassigned an agent` : `assigned an agent`,
+      agentId: currentUserAgent.id,
+      targetId: task.id,
       tenantId: DEFAULT_TENANT_ID,
     });
   };
 
-  const saveDescription = () => {
+  const saveDescription = async () => {
     if (currentUserAgent) {
-        updateTask({
-          taskId: task._id,
-          description,
-          agentId: currentUserAgent._id,
-          tenantId: DEFAULT_TENANT_ID,
-        });
-        setIsEditingDesc(false);
+      await pb.collection("tasks").update(task.id, {
+        description,
+      });
+      await pb.collection("activities").create({
+        type: "tasks",
+        message: `updated task description`,
+        agentId: currentUserAgent.id,
+        targetId: task.id,
+        tenantId: DEFAULT_TENANT_ID,
+      });
+      setIsEditingDesc(false);
     }
   };
-
-  
 
   const docsById = useMemo(() => {
     const map = new Map<string, NonNullable<typeof resources>[number]>();
     if (resources) {
       resources.forEach((doc) => {
-        map.set(doc._id, doc);
+        map.set(doc.id, doc);
       });
     }
     return map;
@@ -132,10 +153,10 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({ taskId, onClose, onPr
 
   const sortedMessages = useMemo(() => {
     if (!messages) return [];
-    return [...messages].sort((a, b) => a._creationTime - b._creationTime);
+    return [...messages].sort((a, b) => new Date(a.created).getTime() - new Date(b.created).getTime());
   }, [messages]);
 
-  const toggleAttachment = (docId: Id<"documents">) => {
+  const toggleAttachment = (docId: string) => {
     setSelectedAttachmentIds((prev) => {
       if (prev.includes(docId)) {
         return prev.filter((id) => id !== docId);
@@ -148,9 +169,9 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({ taskId, onClose, onPr
     if (!currentUserAgent) return;
     const trimmed = commentText.trim();
     if (!trimmed) return;
-    await sendMessage({
-      taskId: task._id,
-      agentId: currentUserAgent._id,
+    await pb.collection("messages").create({
+      taskId: task.id,
+      fromAgentId: currentUserAgent.id,
       content: trimmed,
       attachments: selectedAttachmentIds,
       tenantId: DEFAULT_TENANT_ID,
@@ -162,7 +183,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({ taskId, onClose, onPr
   const buildAgentPreamble = () => {
     if (!task || !agents) return "";
     const assignee = task.assigneeIds.length > 0
-      ? agents.find(a => a._id === task.assigneeIds[0])
+      ? agents.find(a => a.id === task.assigneeIds[0])
       : null;
     if (!assignee) return "";
 
@@ -177,12 +198,11 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({ taskId, onClose, onPr
   const handleResume = async () => {
     if (!currentUserAgent || !task) return;
 
-    // Send comment first if there's text
     const trimmed = commentText.trim();
     if (trimmed) {
-      await sendMessage({
-        taskId: task._id,
-        agentId: currentUserAgent._id,
+      await pb.collection("messages").create({
+        taskId: task.id,
+        fromAgentId: currentUserAgent.id,
         content: trimmed,
         attachments: selectedAttachmentIds,
         tenantId: DEFAULT_TENANT_ID,
@@ -191,40 +211,38 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({ taskId, onClose, onPr
       setSelectedAttachmentIds([]);
     }
 
-    // Move task to in_progress
-    await updateStatus({
-      taskId: task._id,
+    await pb.collection("tasks").update(task.id, {
       status: "in_progress",
-      agentId: currentUserAgent._id,
+    });
+    await pb.collection("activities").create({
+      type: "status",
+      message: `changed status to in_progress`,
+      agentId: currentUserAgent.id,
+      targetId: task.id,
       tenantId: DEFAULT_TENANT_ID,
     });
 
-    // Build prompt with agent context at the top
     let prompt = buildAgentPreamble();
 
     prompt += task.description && task.description !== task.title
       ? `${task.title}\n\n${task.description}`
       : task.title;
 
-    // Include all comments (plus the one we just sent)
     const allMessages = sortedMessages.slice();
     if (trimmed) {
       allMessages.push({
-        _id: "" as any,
-        _creationTime: Date.now(),
         agentName: currentUserAgent.name,
         content: trimmed,
       } as any);
     }
 
     if (allMessages.length > 0) {
-      const thread = allMessages.map(m => `[${m.agentName}]: ${m.content}`).join("\n\n");
+      const thread = allMessages.map(m => `[${(m as any).agentName}]: ${m.content}`).join("\n\n");
       prompt += `\n\n---\nConversation:\n${thread}\n---\nContinue working on this task based on the conversation above.`;
     }
 
-    // Trigger the agent
     try {
-      const res = await fetch("/hooks/agent", {
+      const res = await fetch("/api/hooks/agent", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -232,7 +250,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({ taskId, onClose, onPr
         },
         body: JSON.stringify({
           message: prompt,
-          sessionKey: `mission:${task._id}`,
+          sessionKey: `mission:${task.id}`,
           name: "MissionControl",
           wakeMode: "now",
         }),
@@ -241,10 +259,8 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({ taskId, onClose, onPr
       if (res.ok) {
         const data = await res.json();
         if (data.runId) {
-          await linkRun({
-            taskId: task._id,
+          await pb.collection("tasks").update(task.id, {
             openclawRunId: data.runId,
-            tenantId: DEFAULT_TENANT_ID,
           });
         }
       }
@@ -264,16 +280,16 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({ taskId, onClose, onPr
     if (!currentUserAgent) return;
     const trimmedTitle = newDocTitle.trim();
     if (!trimmedTitle) return;
-    const docId = await createDocument({
+    const doc = await pb.collection("documents").create({
       title: trimmedTitle,
       type: newDocType.trim() || "note",
       content: newDocContent.trim(),
       path: newDocPath.trim() || undefined,
-      taskId: task._id,
-      agentId: currentUserAgent._id,
+      taskId: task.id,
+      createdByAgentId: currentUserAgent.id,
       tenantId: DEFAULT_TENANT_ID,
     });
-    setSelectedAttachmentIds((prev) => [...prev, docId]);
+    setSelectedAttachmentIds((prev) => [...prev, doc.id]);
     resetNewDocForm();
     setIsAddingDoc(false);
   };
@@ -297,22 +313,22 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({ taskId, onClose, onPr
   };
 
   const lastUpdatedActivity = activities?.[0];
-  const lastUpdated = lastUpdatedActivity ? lastUpdatedActivity._creationTime : null;
+  const lastUpdated = lastUpdatedActivity ? new Date(lastUpdatedActivity.created).getTime() : null;
 
   return (
-    <div className="fixed inset-y-0 right-0 w-[380px] bg-white border-l border-border shadow-xl transform transition-transform duration-300 ease-in-out flex flex-col z-50">
+    <div className="fixed inset-y-0 right-0 w-[380px] bg-card border-l border-border shadow-xl transform transition-transform duration-300 ease-in-out flex flex-col z-50">
       {/* Header */}
-      <div className="flex items-center justify-between px-5 py-3 border-b border-border bg-[#f8f9fa]">
+      <div className="flex items-center justify-between px-5 py-3 border-b border-border bg-muted">
         <div className="flex items-center gap-2">
-          <span 
+          <span
             className="w-2 h-2 rounded-full"
             style={{ backgroundColor: statusColors[task.status] || "gray" }}
           />
           <span className="text-xs font-bold tracking-widest text-muted-foreground uppercase">
-            {task._id.slice(-6)}
+            {task.id.slice(-6)}
           </span>
         </div>
-        <button 
+        <button
           onClick={onClose}
           className="p-1 hover:bg-muted rounded text-muted-foreground transition-colors"
         >
@@ -322,7 +338,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({ taskId, onClose, onPr
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-5">
-        
+
         {/* Title */}
         <div>
           <h2 className="text-lg font-bold text-foreground leading-tight mb-1.5">
@@ -335,20 +351,23 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({ taskId, onClose, onPr
               </span>
             ))}
           </div>
-          
+
           {/* Quick Actions */}
           <div className="flex gap-2">
             {task.status !== 'done' && task.status !== 'archived' && (
               <button
-                  onClick={() =>
-                    currentUserAgent &&
-                    updateStatus({
-                      taskId: task._id,
-                      status: "done",
-                      agentId: currentUserAgent._id,
-                      tenantId: DEFAULT_TENANT_ID,
-                    })
-                  }
+                  onClick={async () => {
+                    if (currentUserAgent) {
+                      await pb.collection("tasks").update(task.id, { status: "done" });
+                      await pb.collection("activities").create({
+                        type: "status",
+                        message: "changed status to done",
+                        agentId: currentUserAgent.id,
+                        targetId: task.id,
+                        tenantId: DEFAULT_TENANT_ID,
+                      });
+                    }
+                  }}
                   disabled={!currentUserAgent}
                   className={`flex-1 py-1.5 bg-[var(--accent-green)] text-white rounded text-xs font-medium flex items-center justify-center gap-2 transition-opacity shadow-sm ${!currentUserAgent ? 'opacity-50 cursor-not-allowed' : 'hover:opacity-90'}`}
                   title={!currentUserAgent ? "User agent not found" : "Mark as Done"}
@@ -359,16 +378,20 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({ taskId, onClose, onPr
             )}
             {task.status !== 'archived' && (
               <button
-                  onClick={() =>
-                    currentUserAgent &&
-                    archiveTask({
-                      taskId: task._id,
-                      agentId: currentUserAgent._id,
-                      tenantId: DEFAULT_TENANT_ID,
-                    })
-                  }
+                  onClick={async () => {
+                    if (currentUserAgent) {
+                      await pb.collection("tasks").update(task.id, { status: "archived", archived: true });
+                      await pb.collection("activities").create({
+                        type: "status",
+                        message: "archived task",
+                        agentId: currentUserAgent.id,
+                        targetId: task.id,
+                        tenantId: DEFAULT_TENANT_ID,
+                      });
+                    }
+                  }}
                   disabled={!currentUserAgent}
-                  className={`${task.status === 'done' ? 'flex-1' : ''} py-1.5 px-3 bg-muted text-muted-foreground rounded text-xs font-medium flex items-center justify-center gap-2 transition-colors shadow-sm ${!currentUserAgent ? 'opacity-50 cursor-not-allowed' : 'hover:bg-[#e5e5e5]'}`}
+                  className={`${task.status === 'done' ? 'flex-1' : ''} py-1.5 px-3 bg-muted text-muted-foreground rounded text-xs font-medium flex items-center justify-center gap-2 transition-colors shadow-sm ${!currentUserAgent ? 'opacity-50 cursor-not-allowed' : 'hover:bg-accent'}`}
                   title={!currentUserAgent ? "User agent not found" : "Archive Task"}
               >
                   <IconArchive size={16} />
@@ -398,7 +421,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({ taskId, onClose, onPr
           <div className="flex items-center justify-between">
             <label className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider">Description</label>
             {!isEditingDesc && currentUserAgent && (
-              <button 
+              <button
                 onClick={() => setIsEditingDesc(true)}
                 className="text-[10px] text-[var(--accent-blue)] opacity-0 group-hover:opacity-100 transition-opacity"
               >
@@ -406,22 +429,22 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({ taskId, onClose, onPr
               </button>
             )}
           </div>
-          
+
           {isEditingDesc ? (
             <div className="flex flex-col gap-2">
               <textarea
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                className="w-full min-h-[90px] p-2.5 text-sm border border-border rounded bg-white text-foreground focus:outline-none focus:ring-1 focus:ring-[var(--accent-blue)]"
+                className="w-full min-h-[90px] p-2.5 text-sm border border-border rounded bg-card text-foreground focus:outline-none focus:ring-1 focus:ring-[var(--accent-blue)]"
               />
               <div className="flex justify-end gap-2">
-                <button 
+                <button
                   onClick={() => setIsEditingDesc(false)}
                   className="px-3 py-1 text-xs text-muted-foreground hover:bg-muted rounded"
                 >
                   Cancel
                 </button>
-                <button 
+                <button
                   onClick={saveDescription}
                   className="px-3 py-1 text-xs bg-foreground text-secondary rounded hover:opacity-90"
                 >
@@ -441,17 +464,17 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({ taskId, onClose, onPr
           <label className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider">Assignees</label>
           <div className="flex flex-wrap gap-1.5">
             {task.assigneeIds?.map(id => {
-              const agent = agents?.find(a => a._id === id);
+              const agent = agents?.find(a => a.id === id);
               return (
-                <div key={id} className="flex items-center gap-1.5 px-2 py-1 bg-white border border-border rounded-full shadow-sm">
+                <div key={id} className="flex items-center gap-1.5 px-2 py-1 bg-card border border-border rounded-full shadow-sm">
                   <div className="w-4 h-4 rounded-full bg-muted flex items-center justify-center overflow-hidden">
                      {renderAvatar(agent?.avatar)}
                   </div>
                   <span className="text-xs font-medium text-foreground">{agent?.name || "Unknown"}</span>
-                  <button 
-                    onClick={() => handleAssigneeToggle(id)} 
+                  <button
+                    onClick={() => handleAssigneeToggle(id)}
                     disabled={!currentUserAgent}
-                    className="hover:text-red-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="hover:text-[var(--accent-red)] disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <IconX size={12} />
                   </button>
@@ -461,17 +484,17 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({ taskId, onClose, onPr
             <div className="relative group">
               <button
                 disabled={!currentUserAgent}
-                className="flex items-center gap-1 px-2 py-1 bg-muted border border-transparent rounded-full text-[11px] text-muted-foreground hover:bg-white hover:border-border transition-all disabled:opacity-50"
+                className="flex items-center gap-1 px-2 py-1 bg-muted border border-transparent rounded-full text-[11px] text-muted-foreground hover:bg-card hover:border-border transition-all disabled:opacity-50"
               >
                 <span>+ Add</span>
               </button>
-              
-              {/* Dropdown for adding agents - simplified for now */}
-              <div className="absolute top-full left-0 mt-1 w-48 bg-white border border-border shadow-lg rounded-lg hidden group-hover:block z-10 p-1">
-                 {agents?.filter(a => !task.assigneeIds?.includes(a._id)).map(agent => (
-                   <button 
-                    key={agent._id}
-                    onClick={() => handleAssigneeToggle(agent._id)}
+
+              {/* Dropdown for adding agents */}
+              <div className="absolute top-full left-0 mt-1 w-48 bg-card border border-border shadow-lg rounded-lg hidden group-hover:block z-10 p-1">
+                 {agents?.filter(a => !task.assigneeIds?.includes(a.id)).map(agent => (
+                   <button
+                    key={agent.id}
+                    onClick={() => handleAssigneeToggle(agent.id)}
                     className="w-full text-left px-2 py-1.5 text-xs hover:bg-muted rounded flex items-center gap-2"
                    >
                      <div className="w-4 h-4 rounded-full bg-muted flex items-center justify-center overflow-hidden">
@@ -480,7 +503,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({ taskId, onClose, onPr
                      {agent.name}
                    </button>
                  ))}
-                 {agents?.filter(a => !task.assigneeIds?.includes(a._id)).length === 0 && (
+                 {agents?.filter(a => !task.assigneeIds?.includes(a.id)).length === 0 && (
                    <div className="px-2 py-1.5 text-xs text-muted-foreground text-center">No available agents</div>
                  )}
               </div>
@@ -494,7 +517,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({ taskId, onClose, onPr
                 <label className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider">Resources / Deliverables</label>
                 <div className="space-y-1">
                     {resources.map((doc) => (
-                        <div key={doc._id} onClick={() => onPreviewDocument?.(doc._id)} className="flex items-center justify-between p-1.5 bg-white border border-border rounded text-sm hover:bg-muted transition-colors cursor-pointer">
+                        <div key={doc.id} onClick={() => onPreviewDocument?.(doc.id)} className="flex items-center justify-between p-1.5 bg-card border border-border rounded text-sm hover:bg-muted transition-colors cursor-pointer">
                             <div className="flex items-center gap-2 overflow-hidden">
                                 <IconFileText size={14} className="text-muted-foreground shrink-0" />
                                 <div className="flex flex-col min-w-0">
@@ -531,14 +554,14 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({ taskId, onClose, onPr
           {sortedMessages.length > 0 && (
             <div className="space-y-2.5">
               {sortedMessages.map((msg) => (
-                <div key={msg._id} className="flex gap-2 p-2.5 bg-white border border-border rounded">
+                <div key={msg.id} className="flex gap-2 p-2.5 bg-card border border-border rounded">
                   <div className="w-6 h-6 rounded-full bg-muted flex items-center justify-center overflow-hidden shrink-0">
                     {renderAvatar(msg.agentAvatar)}
                   </div>
                   <div className="flex-1 space-y-1">
                     <div className="flex items-center justify-between text-[11px] text-muted-foreground">
                       <span className="font-semibold text-foreground">{msg.agentName}</span>
-                      <span>{formatCreationDate(msg._creationTime)}</span>
+                      <span>{formatCreationDate(new Date(msg.created).getTime())}</span>
                     </div>
                     <div className="text-sm text-foreground markdown-content">
                       <ReactMarkdown>{msg.content}</ReactMarkdown>
@@ -574,16 +597,16 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({ taskId, onClose, onPr
           {resources && resources.length > 0 && (
             <div className="flex flex-wrap gap-1.5 pt-1">
               {resources.map((doc) => {
-                const isSelected = selectedAttachmentIds.includes(doc._id);
+                const isSelected = selectedAttachmentIds.includes(doc.id);
                 return (
                   <button
-                    key={doc._id}
-                    onClick={() => toggleAttachment(doc._id)}
+                    key={doc.id}
+                    onClick={() => toggleAttachment(doc.id)}
                     disabled={!currentUserAgent}
                     className={`text-[10px] px-2 py-0.5 rounded border transition-colors ${
                       isSelected
                         ? "bg-[var(--accent-blue)] text-white border-[var(--accent-blue)]"
-                        : "bg-white text-muted-foreground border-border hover:bg-muted"
+                        : "bg-card text-muted-foreground border-border hover:bg-muted"
                     } disabled:opacity-50`}
                   >
                     {doc.title}
@@ -624,27 +647,27 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({ taskId, onClose, onPr
                   value={newDocTitle}
                   onChange={(e) => setNewDocTitle(e.target.value)}
                   placeholder="Document title"
-                  className="w-full p-2 text-xs border border-border rounded bg-white text-foreground focus:outline-none focus:ring-1 focus:ring-[var(--accent-blue)]"
+                  className="w-full p-2 text-xs border border-border rounded bg-card text-foreground focus:outline-none focus:ring-1 focus:ring-[var(--accent-blue)]"
                 />
                 <div className="flex gap-2">
                   <input
                     value={newDocType}
                     onChange={(e) => setNewDocType(e.target.value)}
                     placeholder="Type (note, spec, link)"
-                    className="flex-1 p-2 text-xs border border-border rounded bg-white text-foreground focus:outline-none focus:ring-1 focus:ring-[var(--accent-blue)]"
+                    className="flex-1 p-2 text-xs border border-border rounded bg-card text-foreground focus:outline-none focus:ring-1 focus:ring-[var(--accent-blue)]"
                   />
                   <input
                     value={newDocPath}
                     onChange={(e) => setNewDocPath(e.target.value)}
                     placeholder="Path (optional)"
-                    className="flex-1 p-2 text-xs border border-border rounded bg-white text-foreground focus:outline-none focus:ring-1 focus:ring-[var(--accent-blue)]"
+                    className="flex-1 p-2 text-xs border border-border rounded bg-card text-foreground focus:outline-none focus:ring-1 focus:ring-[var(--accent-blue)]"
                   />
                 </div>
                 <textarea
                   value={newDocContent}
                   onChange={(e) => setNewDocContent(e.target.value)}
                   placeholder="Content (optional)"
-                  className="w-full min-h-[70px] p-2 text-xs border border-border rounded bg-white text-foreground focus:outline-none focus:ring-1 focus:ring-[var(--accent-blue)]"
+                  className="w-full min-h-[70px] p-2 text-xs border border-border rounded bg-card text-foreground focus:outline-none focus:ring-1 focus:ring-[var(--accent-blue)]"
                 />
                 <div className="flex justify-end gap-2">
                   <button
@@ -674,7 +697,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({ taskId, onClose, onPr
               onChange={(e) => setCommentText(e.target.value)}
               placeholder={currentUserAgent ? "Write a comment..." : "Sign in as an agent to comment"}
               disabled={!currentUserAgent}
-              className="w-full min-h-[80px] p-2.5 text-sm border border-border rounded bg-white text-foreground focus:outline-none focus:ring-1 focus:ring-[var(--accent-blue)] disabled:opacity-50"
+              className="w-full min-h-[80px] p-2.5 text-sm border border-border rounded bg-card text-foreground focus:outline-none focus:ring-1 focus:ring-[var(--accent-blue)] disabled:opacity-50"
             />
             <div className="flex justify-end gap-2">
               <button
@@ -703,7 +726,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({ taskId, onClose, onPr
             <div className="flex items-center justify-between text-xs text-muted-foreground">
                 <div className="flex items-center gap-2">
                     <IconClock size={12} />
-                    <span>Created {formatCreationDate(task._creationTime)}</span>
+                    <span>Created {formatCreationDate(new Date(task.created).getTime())}</span>
                 </div>
                 {lastUpdated && (
                     <div className="flex items-center gap-2">
@@ -717,14 +740,14 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({ taskId, onClose, onPr
                     <IconMessage size={12} />
                     <span>{messages?.length || 0} comments</span>
                 </div>
-                 <div 
-                    className="flex items-center gap-2 cursor-pointer hover:text-foreground transition-colors" 
+                 <div
+                    className="flex items-center gap-2 cursor-pointer hover:text-foreground transition-colors"
                     onClick={() => {
-                        navigator.clipboard.writeText(task._id);
+                        navigator.clipboard.writeText(task.id);
                     }}
                     title="Copy Task ID"
                  >
-                     <span>ID: {task._id.slice(-6)}</span>
+                     <span>ID: {task.id.slice(-6)}</span>
                      <IconCopy size={12} />
                 </div>
             </div>

@@ -1,12 +1,10 @@
-import React from "react";
-import { useQuery } from "convex/react";
-import { api } from "../../../convex/_generated/api";
-import { Id } from "../../../convex/_generated/dataModel";
+import React, { useMemo } from "react";
+import { usePBRecord, usePBQuery, type Document, type Message, type Agent, type Task } from "../../lib/pocketbase";
 import Markdown from "react-markdown";
 import { DEFAULT_TENANT_ID } from "../../lib/tenant";
 
 type ConversationTrayProps = {
-  documentId: Id<"documents">;
+  documentId: string;
   onClose: () => void;
   onOpenPreview: () => void;
 };
@@ -16,12 +14,50 @@ const ConversationTray: React.FC<ConversationTrayProps> = ({
   onClose,
   onOpenPreview,
 }) => {
-  const documentContext = useQuery(api.documents.getWithContext, {
-    documentId,
-    tenantId: DEFAULT_TENANT_ID,
+  const document = usePBRecord<Document>("documents", documentId);
+
+  const taskId = document?.taskId || null;
+
+  const agents = usePBQuery<Agent>("agents", {
+    filter: "tenantId = {:tid}",
+    filterParams: { tid: DEFAULT_TENANT_ID },
   });
 
-  if (!documentContext) {
+  const tasks = usePBQuery<Task>("tasks", taskId ? {
+    filter: "tenantId = {:tid} && id = {:taskId}",
+    filterParams: { tid: DEFAULT_TENANT_ID, taskId },
+  } : "skip");
+
+  const rawMessages = usePBQuery<Message>("messages", taskId ? {
+    filter: "tenantId = {:tid} && taskId = {:taskId}",
+    filterParams: { tid: DEFAULT_TENANT_ID, taskId },
+    sort: "created",
+  } : "skip");
+
+  // Derive context from separate queries
+  const task = tasks?.[0] || null;
+
+  const agentMap = useMemo(() => {
+    if (!agents) return new Map<string, Agent>();
+    return new Map(agents.map(a => [a.id, a]));
+  }, [agents]);
+
+  const creatorAgent = document?.createdByAgentId ? agentMap.get(document.createdByAgentId) : null;
+
+  const conversationMessages = useMemo(() => {
+    if (!rawMessages) return [];
+    return rawMessages.map(msg => {
+      const agent = agentMap.get(msg.fromAgentId);
+      return {
+        ...msg,
+        agentName: agent?.name || "Unknown",
+        agentAvatar: agent?.avatar,
+      };
+    });
+  }, [rawMessages, agentMap]);
+
+  // Loading state
+  if (document === undefined) {
     return (
       <div className="tray is-open">
         <div className="p-4 animate-pulse">
@@ -31,6 +67,17 @@ const ConversationTray: React.FC<ConversationTrayProps> = ({
               <div key={i} className="h-16 bg-muted rounded" />
             ))}
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Not found
+  if (document === null) {
+    return (
+      <div className="tray is-open">
+        <div className="p-4 text-center text-muted-foreground">
+          Document not found
         </div>
       </div>
     );
@@ -66,22 +113,22 @@ const ConversationTray: React.FC<ConversationTrayProps> = ({
         {/* Document info */}
         <div className="px-4 py-3 border-b border-border bg-muted/30">
           <h3 className="text-sm font-semibold text-foreground truncate">
-            {documentContext.title}
+            {document.title}
           </h3>
           <div className="flex items-center gap-2 mt-1.5 text-[10px] text-muted-foreground">
-            {documentContext.agentName && (
+            {creatorAgent?.name && (
               <>
                 <span className="text-[var(--accent-orange)] font-medium">
-                  {documentContext.agentName}
+                  {creatorAgent.name}
                 </span>
                 <span>·</span>
               </>
             )}
-            <span className="capitalize">{documentContext.type}</span>
-            {documentContext.taskTitle && (
+            <span className="capitalize">{document.type}</span>
+            {task?.title && (
               <>
                 <span>·</span>
-                <span className="truncate">Task: {documentContext.taskTitle}</span>
+                <span className="truncate">Task: {task.title}</span>
               </>
             )}
           </div>
@@ -91,34 +138,34 @@ const ConversationTray: React.FC<ConversationTrayProps> = ({
         <div className="flex-1 overflow-y-auto p-4">
           <div className="flex flex-col gap-3">
             {/* Original prompt */}
-            {documentContext.taskDescription && (
+            {task?.description && (
               <>
                 <div className="text-[10px] font-bold tracking-widest text-muted-foreground mb-1">
                   PROMPT
                 </div>
-                <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg mb-2">
+                <div className="p-3 bg-[var(--accent-blue)]/10 border border-[var(--accent-blue)]/20 rounded-lg mb-2">
                   <div className="flex items-center gap-2 mb-1.5">
                     <span className="text-lg">👤</span>
-                    <span className="text-xs font-semibold text-blue-700">
+                    <span className="text-xs font-semibold text-[var(--accent-blue)]">
                       User
                     </span>
                   </div>
                   <div className="text-xs text-foreground leading-relaxed markdown-content">
-                    <Markdown>{documentContext.taskDescription}</Markdown>
+                    <Markdown>{task.description}</Markdown>
                   </div>
                 </div>
               </>
             )}
 
             {/* Message thread */}
-            {documentContext.conversationMessages.length > 0 && (
+            {conversationMessages.length > 0 && (
               <>
                 <div className="text-[10px] font-bold tracking-widest text-muted-foreground mb-1">
                   AGENT THREAD
                 </div>
-                {documentContext.conversationMessages.map((msg) => (
+                {conversationMessages.map((msg) => (
                   <div
-                    key={msg._id}
+                    key={msg.id}
                     className="p-3 bg-secondary border border-border rounded-lg"
                   >
                     <div className="flex items-center gap-2 mb-1.5">
@@ -138,8 +185,8 @@ const ConversationTray: React.FC<ConversationTrayProps> = ({
             )}
 
             {/* No content message */}
-            {!documentContext.taskDescription &&
-              documentContext.conversationMessages.length === 0 && (
+            {!task?.description &&
+              conversationMessages.length === 0 && (
                 <div className="text-center py-8">
                   <div className="text-muted-foreground text-sm">
                     No conversation history available

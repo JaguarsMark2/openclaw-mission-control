@@ -1,8 +1,7 @@
 import React, { useState, useCallback } from "react";
-import { useMutation, useQuery } from "convex/react";
-import { api } from "../../convex/_generated/api";
-import { Id } from "../../convex/_generated/dataModel";
 import { DEFAULT_TENANT_ID } from "../lib/tenant";
+import { usePBQuery, pb } from "../lib/pocketbase";
+import type { Agent } from "../lib/pocketbase";
 
 const STATUS_OPTIONS = [
 	{ value: "inbox", label: "Inbox" },
@@ -25,14 +24,15 @@ const COLOR_SWATCHES = [
 
 type AddTaskModalProps = {
 	onClose: () => void;
-	onCreated: (taskId: Id<"tasks">) => void;
+	onCreated: (taskId: string) => void;
 	initialAssigneeId?: string;
 };
 
 const AddTaskModal: React.FC<AddTaskModalProps> = ({ onClose, onCreated, initialAssigneeId }) => {
-	const agents = useQuery(api.queries.listAgents, { tenantId: DEFAULT_TENANT_ID });
-	const createTask = useMutation(api.tasks.createTask);
-	const updateAssignees = useMutation(api.tasks.updateAssignees);
+	const agents = usePBQuery<Agent>("agents", {
+		filter: "tenantId = {:tid}",
+		filterParams: { tid: DEFAULT_TENANT_ID },
+	});
 
 	const [title, setTitle] = useState("");
 	const [description, setDescription] = useState("");
@@ -68,24 +68,31 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({ onClose, onCreated, initial
 			setSubmitting(true);
 
 			try {
-					const taskId = await createTask({
-						title: title.trim(),
-						description: description.trim() || title.trim(),
-						status,
-						tags,
-						borderColor: borderColor || undefined,
-						tenantId: DEFAULT_TENANT_ID,
-					});
+				const record = await pb.collection("tasks").create({
+					title: title.trim(),
+					description: description.trim() || title.trim(),
+					status,
+					assigneeIds: [],
+					tags,
+					borderColor: borderColor || undefined,
+					tenantId: DEFAULT_TENANT_ID,
+				});
+
+				const taskId = record.id;
 
 				if (assigneeId && agents) {
-					const agent = agents.find((a) => a._id === assigneeId);
+					const agent = agents.find((a) => a.id === assigneeId);
 					if (agent) {
-							await updateAssignees({
-								taskId,
-								assigneeIds: [assigneeId as Id<"agents">],
-								agentId: agent._id,
-								tenantId: DEFAULT_TENANT_ID,
-							});
+						await pb.collection("tasks").update(taskId, {
+							assigneeIds: [assigneeId],
+						});
+						await pb.collection("activity").create({
+							type: "assignee_change",
+							message: `Assigned to ${agent.name}`,
+							agentId: agent.id,
+							targetId: taskId,
+							tenantId: DEFAULT_TENANT_ID,
+						});
 					}
 				}
 
@@ -102,8 +109,6 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({ onClose, onCreated, initial
 			borderColor,
 			assigneeId,
 			agents,
-			createTask,
-			updateAssignees,
 			onCreated,
 		],
 	);
@@ -116,7 +121,7 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({ onClose, onCreated, initial
 		>
 			<div className="absolute inset-0 bg-black/40" />
 			<div
-				className="relative bg-white rounded-xl border border-border shadow-2xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto"
+				className="relative bg-card rounded-xl border border-border shadow-2xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto"
 				onClick={(e) => e.stopPropagation()}
 			>
 				<div className="flex items-center justify-between px-6 py-4 border-b border-border">
@@ -143,7 +148,7 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({ onClose, onCreated, initial
 							type="text"
 							value={title}
 							onChange={(e) => setTitle(e.target.value)}
-							className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[var(--accent-blue)] focus:border-transparent"
+							className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-card focus:outline-none focus:ring-2 focus:ring-[var(--accent-blue)] focus:border-transparent"
 							placeholder="Task title"
 							required
 							autoFocus
@@ -158,7 +163,7 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({ onClose, onCreated, initial
 						<textarea
 							value={description}
 							onChange={(e) => setDescription(e.target.value)}
-							className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[var(--accent-blue)] focus:border-transparent resize-none"
+							className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-card focus:outline-none focus:ring-2 focus:ring-[var(--accent-blue)] focus:border-transparent resize-none"
 							placeholder="Optional — defaults to title"
 							rows={3}
 						/>
@@ -172,7 +177,7 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({ onClose, onCreated, initial
 						<select
 							value={status}
 							onChange={(e) => setStatus(e.target.value)}
-							className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[var(--accent-blue)] focus:border-transparent"
+							className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-card focus:outline-none focus:ring-2 focus:ring-[var(--accent-blue)] focus:border-transparent"
 						>
 							{STATUS_OPTIONS.map((opt) => (
 								<option key={opt.value} value={opt.value}>
@@ -212,7 +217,7 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({ onClose, onCreated, initial
 							value={tagInput}
 							onChange={(e) => setTagInput(e.target.value)}
 							onKeyDown={handleAddTag}
-							className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[var(--accent-blue)] focus:border-transparent"
+							className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-card focus:outline-none focus:ring-2 focus:ring-[var(--accent-blue)] focus:border-transparent"
 							placeholder="Type a tag and press Enter"
 						/>
 					</div>
@@ -231,11 +236,11 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({ onClose, onCreated, initial
 									setStatus("assigned");
 								}
 							}}
-							className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[var(--accent-blue)] focus:border-transparent"
+							className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-card focus:outline-none focus:ring-2 focus:ring-[var(--accent-blue)] focus:border-transparent"
 						>
 							<option value="">Unassigned</option>
 							{agents?.map((agent) => (
-								<option key={agent._id} value={agent._id}>
+								<option key={agent.id} value={agent.id}>
 									{agent.avatar} {agent.name} — {agent.role}
 								</option>
 							))}

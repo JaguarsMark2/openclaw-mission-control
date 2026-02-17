@@ -1,15 +1,14 @@
 import React from "react";
 import { useDraggable } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
-import { Id } from "../../convex/_generated/dataModel";
 import { IconArchive, IconPlayerPlay, IconLoader2 } from "@tabler/icons-react";
 
 interface Task {
-	_id: Id<"tasks">;
+	id: string;
 	title: string;
 	description: string;
 	status: string;
-	assigneeIds: Id<"agents">[];
+	assigneeIds: string[];
 	tags: string[];
 	borderColor?: string;
 	lastMessageTime?: number;
@@ -22,9 +21,9 @@ interface TaskCardProps {
 	getAgentName: (id: string) => string;
 	formatRelativeTime: (timestamp: number | null) => string;
 	columnId: string;
-	currentUserAgentId?: Id<"agents">;
-	onArchive?: (taskId: Id<"tasks">) => void;
-	onPlay?: (taskId: Id<"tasks">) => void;
+	currentUserAgentId?: string;
+	onArchive?: (taskId: string) => void;
+	onPlay?: (taskId: string) => void;
 	isOverlay?: boolean;
 }
 
@@ -47,7 +46,7 @@ const TaskCard: React.FC<TaskCardProps> = ({
 		transform,
 		isDragging,
 	} = useDraggable({
-		id: task._id,
+		id: task.id,
 		data: { task },
 	});
 
@@ -67,7 +66,7 @@ const TaskCard: React.FC<TaskCardProps> = ({
 						? undefined
 						: `4px solid ${task.borderColor || "transparent"}`,
 			}}
-				className={`min-w-0 bg-white rounded-lg p-3 sm:p-4 shadow-sm flex flex-col gap-3 border transition-all cursor-pointer select-none ${
+				className={`min-w-0 bg-card rounded-lg p-3 sm:p-4 shadow-sm flex flex-col gap-3 border transition-all cursor-pointer select-none ${
 				isDragging ? "dragging-card" : "hover:-translate-y-0.5 hover:shadow-md"
 			} ${
 				isSelected
@@ -87,7 +86,7 @@ const TaskCard: React.FC<TaskCardProps> = ({
 						<button
 							onClick={(e) => {
 								e.stopPropagation();
-								onPlay(task._id);
+								onPlay(task.id);
 							}}
 							className="p-1 hover:bg-muted rounded transition-colors text-muted-foreground hover:text-[var(--accent-blue)]"
 							title="Start task"
@@ -104,7 +103,7 @@ const TaskCard: React.FC<TaskCardProps> = ({
 						<button
 							onClick={(e) => {
 								e.stopPropagation();
-								onArchive(task._id);
+								onArchive(task.id);
 							}}
 							className="p-1 hover:bg-muted rounded transition-colors text-muted-foreground hover:text-foreground"
 							title="Archive task"
@@ -126,7 +125,7 @@ const TaskCard: React.FC<TaskCardProps> = ({
 					<div className="flex items-center gap-1.5">
 						<span className="text-xs">👤</span>
 						<span className="text-[11px] font-semibold text-foreground">
-							{getAgentName(task.assigneeIds[0] as string)}
+							{getAgentName(task.assigneeIds[0])}
 						</span>
 					</div>
 				)}

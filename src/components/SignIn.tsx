@@ -1,9 +1,8 @@
-import { useAuthActions } from "@convex-dev/auth/react";
+import { signIn, signUp } from "../lib/pocketbase";
 import { IconEye, IconEyeOff } from "@tabler/icons-react";
 import { useState } from "react";
 
 function SignInForm() {
-	const { signIn } = useAuthActions();
 	const [flow, setFlow] = useState<"signIn" | "signUp">("signIn");
 	const [error, setError] = useState<string | null>(null);
 	const [showPassword, setShowPassword] = useState(false);
@@ -32,11 +31,19 @@ function SignInForm() {
 						className="space-y-5"
 						onSubmit={(e) => {
 							e.preventDefault();
+							setError(null);
 							const formData = new FormData(e.target as HTMLFormElement);
-							formData.set("flow", flow);
-							void signIn("password", formData).catch((error) => {
-								setError(error.message);
-							});
+							const email = formData.get("email") as string;
+							const password = formData.get("password") as string;
+							if (flow === "signIn") {
+								void signIn(email, password).catch((error) => {
+									setError(error.message);
+								});
+							} else {
+								void signUp(email, password).catch((error) => {
+									setError(error.message);
+								});
+							}
 						}}
 					>
 						<div className="space-y-4">

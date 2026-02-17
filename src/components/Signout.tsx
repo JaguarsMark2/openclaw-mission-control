@@ -1,15 +1,13 @@
-import { useAuthActions } from "@convex-dev/auth/react";
-import { useConvexAuth } from "convex/react";
+import { useAuth, signOut } from "../lib/pocketbase";
 
 function SignOutButton() {
-	const { isAuthenticated } = useConvexAuth();
-	const { signOut } = useAuthActions();
+	const { isAuthenticated } = useAuth();
 	return (
 		<>
 			{isAuthenticated && (
 				<button
-					className="bg-destructive text-destructive-foreground rounded-md px-2 py-1 cursor-pointer hover:bg-destructive/80"
-					onClick={() => void signOut()}
+					className="bg-muted text-muted-foreground rounded-md px-3 py-1.5 cursor-pointer hover:bg-accent hover:text-foreground text-xs font-medium transition-colors"
+					onClick={() => signOut()}
 				>
 					Sign out
 				</button>

@@ -1,12 +1,10 @@
-import React from "react";
-import { useQuery } from "convex/react";
-import { api } from "../../../convex/_generated/api";
-import { Id } from "../../../convex/_generated/dataModel";
+import React, { useMemo } from "react";
+import { usePBRecord, usePBQuery, type Document, type Agent, type Task } from "../../lib/pocketbase";
 import Markdown from "react-markdown";
 import { DEFAULT_TENANT_ID } from "../../lib/tenant";
 
 type DocumentPreviewTrayProps = {
-  documentId: Id<"documents">;
+  documentId: string;
   onClose: () => void;
 };
 
@@ -14,12 +12,31 @@ const DocumentPreviewTray: React.FC<DocumentPreviewTrayProps> = ({
   documentId,
   onClose,
 }) => {
-  const documentContext = useQuery(api.documents.getWithContext, {
-    documentId,
-    tenantId: DEFAULT_TENANT_ID,
+  const document = usePBRecord<Document>("documents", documentId);
+
+  const taskId = document?.taskId || null;
+
+  const agents = usePBQuery<Agent>("agents", {
+    filter: "tenantId = {:tid}",
+    filterParams: { tid: DEFAULT_TENANT_ID },
   });
 
-  if (!documentContext) {
+  const tasks = usePBQuery<Task>("tasks", taskId ? {
+    filter: "tenantId = {:tid} && id = {:taskId}",
+    filterParams: { tid: DEFAULT_TENANT_ID, taskId },
+  } : "skip");
+
+  const task = tasks?.[0] || null;
+
+  const agentMap = useMemo(() => {
+    if (!agents) return new Map<string, Agent>();
+    return new Map(agents.map(a => [a.id, a]));
+  }, [agents]);
+
+  const creatorAgent = document?.createdByAgentId ? agentMap.get(document.createdByAgentId) : null;
+
+  // Loading state
+  if (document === undefined) {
     return (
       <div className="tray tray-preview is-open">
         <div className="p-4 animate-pulse">
@@ -30,8 +47,19 @@ const DocumentPreviewTray: React.FC<DocumentPreviewTrayProps> = ({
     );
   }
 
+  // Not found
+  if (document === null) {
+    return (
+      <div className="tray tray-preview is-open">
+        <div className="p-4 text-center text-muted-foreground">
+          Document not found
+        </div>
+      </div>
+    );
+  }
+
   const renderContent = () => {
-    const { type, content } = documentContext;
+    const { type, content } = document;
 
     // Image - render from URL, data URI, or local file path
     if (type === "image") {
@@ -44,7 +72,7 @@ const DocumentPreviewTray: React.FC<DocumentPreviewTrayProps> = ({
       ) {
         imgSrc = content;
       } else if (content.startsWith("/")) {
-        // Local file path — serve via Vite dev server
+        // Local file path -- serve via Vite dev server
         imgSrc = `/api/local-file?path=${encodeURIComponent(content)}`;
       }
 
@@ -53,7 +81,7 @@ const DocumentPreviewTray: React.FC<DocumentPreviewTrayProps> = ({
           <div className="flex items-center justify-center p-4">
             <img
               src={imgSrc}
-              alt={documentContext.title}
+              alt={document.title}
               className="max-w-full max-h-[60vh] object-contain rounded-lg shadow-md"
             />
           </div>
@@ -81,7 +109,7 @@ const DocumentPreviewTray: React.FC<DocumentPreviewTrayProps> = ({
     // Markdown or Notes
     if (type === "markdown" || type === "note") {
       return (
-        <div className="p-4 prose prose-sm max-w-none markdown-content">
+        <div className="p-4 prose prose-sm prose-invert max-w-none markdown-content">
           <Markdown>{content}</Markdown>
         </div>
       );
@@ -100,15 +128,15 @@ const DocumentPreviewTray: React.FC<DocumentPreviewTrayProps> = ({
   const getTypeColor = (type: string) => {
     switch (type) {
       case "markdown":
-        return "bg-blue-100 text-blue-700";
+        return "bg-[var(--accent-blue)]/20 text-[var(--accent-blue)]";
       case "code":
-        return "bg-green-100 text-green-700";
+        return "bg-[var(--accent-green)]/20 text-[var(--accent-green)]";
       case "image":
-        return "bg-purple-100 text-purple-700";
+        return "bg-[var(--accent-purple)]/20 text-[var(--accent-purple)]";
       case "note":
-        return "bg-yellow-100 text-yellow-700";
+        return "bg-[var(--accent-yellow)]/20 text-[var(--accent-yellow)]";
       default:
-        return "bg-gray-100 text-gray-700";
+        return "bg-muted text-muted-foreground";
     }
   };
 
@@ -131,42 +159,42 @@ const DocumentPreviewTray: React.FC<DocumentPreviewTrayProps> = ({
             </span>
           </div>
           <span
-            className={`text-[10px] font-semibold px-2 py-1 rounded ${getTypeColor(documentContext.type)}`}
+            className={`text-[10px] font-semibold px-2 py-1 rounded ${getTypeColor(document.type)}`}
           >
-            {documentContext.type.toUpperCase()}
+            {document.type.toUpperCase()}
           </span>
         </div>
 
         {/* Document title */}
         <div className="px-4 py-3 border-b border-border bg-muted/30">
           <h3 className="text-sm font-semibold text-foreground">
-            {documentContext.title}
+            {document.title}
           </h3>
-          {documentContext.path && (
+          {document.path && (
             <div className="text-[10px] text-muted-foreground mt-1 font-mono truncate">
-              {documentContext.path}
+              {document.path}
             </div>
           )}
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto bg-white">{renderContent()}</div>
+        <div className="flex-1 overflow-y-auto bg-card">{renderContent()}</div>
 
         {/* Footer with metadata */}
         <div className="px-4 py-2 border-t border-border bg-muted/30 text-[10px] text-muted-foreground flex items-center gap-4">
-          {documentContext.agentName && (
+          {creatorAgent?.name && (
             <div className="flex items-center gap-1">
               <span>Created by</span>
               <span className="text-[var(--accent-orange)] font-medium">
-                {documentContext.agentName}
+                {creatorAgent.name}
               </span>
             </div>
           )}
-          {documentContext.taskTitle && (
+          {task?.title && (
             <div className="flex items-center gap-1 truncate">
               <span>Task:</span>
               <span className="font-medium truncate">
-                {documentContext.taskTitle}
+                {task.title}
               </span>
             </div>
           )}

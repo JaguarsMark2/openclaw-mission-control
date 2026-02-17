@@ -1,10 +1,9 @@
 import React from "react";
-import { Id } from "../../../convex/_generated/dataModel";
 import ConversationTray from "./ConversationTray";
 import DocumentPreviewTray from "./DocumentPreviewTray";
 
 type TrayContainerProps = {
-  selectedDocumentId: Id<"documents"> | null;
+  selectedDocumentId: string | null;
   showConversation: boolean;
   showPreview: boolean;
   onCloseConversation: () => void;

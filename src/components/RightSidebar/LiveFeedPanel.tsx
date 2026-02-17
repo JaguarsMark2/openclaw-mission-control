@@ -1,7 +1,5 @@
-import React, { useState } from "react";
-import { useQuery } from "convex/react";
-import { api } from "../../../convex/_generated/api";
-import { Id } from "../../../convex/_generated/dataModel";
+import React, { useMemo, useState } from "react";
+import { usePBQuery, type Agent, type Activity } from "../../lib/pocketbase";
 import { DEFAULT_TENANT_ID } from "../../lib/tenant";
 
 const filters = [
@@ -15,16 +13,44 @@ const filters = [
 
 const LiveFeedPanel: React.FC = () => {
   const [selectedType, setSelectedType] = useState<string>("all");
-  const [selectedAgentId, setSelectedAgentId] = useState<
-    Id<"agents"> | undefined
-  >(undefined);
+  const [selectedAgentId, setSelectedAgentId] = useState<string | undefined>(undefined);
 
-  const activities = useQuery(api.queries.listActivities, {
-    tenantId: DEFAULT_TENANT_ID,
-    type: selectedType === "all" ? undefined : selectedType,
-    agentId: selectedAgentId,
+  // Build filter dynamically
+  const activitiesOptions = useMemo(() => {
+    const parts: string[] = ["tenantId = {:tid}"];
+    const params: Record<string, string> = { tid: DEFAULT_TENANT_ID };
+
+    if (selectedType !== "all") {
+      parts.push("type = {:type}");
+      params.type = selectedType;
+    }
+    if (selectedAgentId) {
+      parts.push("agentId = {:agentId}");
+      params.agentId = selectedAgentId;
+    }
+
+    return {
+      filter: parts.join(" && "),
+      filterParams: params,
+      sort: "-created",
+    };
+  }, [selectedType, selectedAgentId]);
+
+  const rawActivities = usePBQuery<Activity>("activities", activitiesOptions);
+  const agents = usePBQuery<Agent>("agents", {
+    filter: "tenantId = {:tid}",
+    filterParams: { tid: DEFAULT_TENANT_ID },
   });
-  const agents = useQuery(api.queries.listAgents, { tenantId: DEFAULT_TENANT_ID });
+
+  // Enrich activities with agentName client-side
+  const activities = useMemo(() => {
+    if (!rawActivities || !agents) return undefined;
+    const agentMap = new Map(agents.map(a => [a.id, a]));
+    return rawActivities.map(item => ({
+      ...item,
+      agentName: agentMap.get(item.agentId)?.name || "Unknown",
+    }));
+  }, [rawActivities, agents]);
 
   if (activities === undefined || agents === undefined) {
     return (
@@ -62,20 +88,20 @@ const LiveFeedPanel: React.FC = () => {
             onClick={() => setSelectedAgentId(undefined)}
             className={`text-[10px] font-semibold px-2.5 py-1 rounded-full border cursor-pointer transition-colors ${
               selectedAgentId === undefined
-                ? "border-[var(--accent-orange)] text-[var(--accent-orange)] bg-white"
-                : "border-border bg-white text-muted-foreground hover:bg-muted/50"
+                ? "border-[var(--accent-orange)] text-[var(--accent-orange)] bg-card"
+                : "border-border bg-card text-muted-foreground hover:bg-muted/50"
             }`}
           >
             All Agents
           </div>
           {agents.slice(0, 8).map((a) => (
             <div
-              key={a._id}
-              onClick={() => setSelectedAgentId(a._id)}
+              key={a.id}
+              onClick={() => setSelectedAgentId(a.id)}
               className={`text-[10px] font-semibold px-2.5 py-1 rounded-full border cursor-pointer flex items-center gap-1 transition-colors ${
-                selectedAgentId === a._id
-                  ? "border-[var(--accent-orange)] text-[var(--accent-orange)] bg-white"
-                  : "border-border bg-white text-muted-foreground hover:bg-muted/50"
+                selectedAgentId === a.id
+                  ? "border-[var(--accent-orange)] text-[var(--accent-orange)] bg-card"
+                  : "border-border bg-card text-muted-foreground hover:bg-muted/50"
               }`}
             >
               {a.name}
@@ -87,7 +113,7 @@ const LiveFeedPanel: React.FC = () => {
       <div className="flex flex-col gap-3">
         {activities.map((item) => (
           <div
-            key={item._id}
+            key={item.id}
             className="flex gap-3 p-3 bg-secondary border border-border rounded-lg"
           >
             <div className="w-1.5 h-1.5 bg-[var(--accent-orange)] rounded-full mt-1.5 shrink-0" />

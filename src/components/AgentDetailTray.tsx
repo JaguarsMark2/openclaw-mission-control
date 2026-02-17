@@ -1,19 +1,20 @@
 import React, { useState, useCallback, useEffect } from "react";
-import { useQuery, useMutation } from "convex/react";
-import { api } from "../../convex/_generated/api";
-import { Id } from "../../convex/_generated/dataModel";
+import { usePBQuery, pb } from "../lib/pocketbase";
+import type { Agent } from "../lib/pocketbase";
 import { DEFAULT_TENANT_ID } from "../lib/tenant";
 
 type AgentDetailTrayProps = {
-	agentId: Id<"agents"> | null;
+	agentId: string | null;
 	onClose: () => void;
 };
 
 const AgentDetailTray: React.FC<AgentDetailTrayProps> = ({ agentId, onClose }) => {
-	const agents = useQuery(api.queries.listAgents, { tenantId: DEFAULT_TENANT_ID });
-	const updateAgent = useMutation(api.agents.updateAgent);
+	const agents = usePBQuery<Agent>("agents", {
+		filter: "tenantId = {:tid}",
+		filterParams: { tid: DEFAULT_TENANT_ID },
+	});
 
-	const agent = agents?.find((a) => a._id === agentId) ?? null;
+	const agent = agents?.find((a) => a.id === agentId) ?? null;
 
 	const [isEditing, setIsEditing] = useState(false);
 	const [editName, setEditName] = useState("");
@@ -38,29 +39,27 @@ const AgentDetailTray: React.FC<AgentDetailTrayProps> = ({ agentId, onClose }) =
 			setEditLore(agent.lore ?? "");
 		}
 		setIsEditing(false);
-	}, [agent?._id]);
+	}, [agent?.id]);
 
 	const handleSave = useCallback(async () => {
 		if (!agentId) return;
 		setSaving(true);
 		try {
-				await updateAgent({
-					id: agentId,
+			await pb.collection("agents").update(agentId, {
 				name: editName,
 				role: editRole,
 				level: editLevel,
 				avatar: editAvatar,
 				status: editStatus,
-					systemPrompt: editSystemPrompt,
-					character: editCharacter,
-					lore: editLore,
-					tenantId: DEFAULT_TENANT_ID,
-				});
+				systemPrompt: editSystemPrompt,
+				character: editCharacter,
+				lore: editLore,
+			});
 			setIsEditing(false);
 		} finally {
 			setSaving(false);
 		}
-	}, [agentId, editName, editRole, editLevel, editAvatar, editStatus, editSystemPrompt, editCharacter, editLore, updateAgent]);
+	}, [agentId, editName, editRole, editLevel, editAvatar, editStatus, editSystemPrompt, editCharacter, editLore]);
 
 	const handleCancel = useCallback(() => {
 		if (agent) {
@@ -120,7 +119,7 @@ const AgentDetailTray: React.FC<AgentDetailTrayProps> = ({ agentId, onClose }) =
 										type="text"
 										value={editName}
 										onChange={(e) => setEditName(e.target.value)}
-										className="w-full text-lg font-bold text-foreground border border-border rounded-lg px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-[var(--accent-blue)]"
+										className="w-full text-lg font-bold text-foreground border border-border rounded-lg px-2 py-1 bg-card focus:outline-none focus:ring-2 focus:ring-[var(--accent-blue)]"
 									/>
 								) : (
 									<div className="text-lg font-bold text-foreground">{agent.name}</div>
@@ -130,7 +129,7 @@ const AgentDetailTray: React.FC<AgentDetailTrayProps> = ({ agentId, onClose }) =
 										type="text"
 										value={editRole}
 										onChange={(e) => setEditRole(e.target.value)}
-										className="w-full text-xs text-muted-foreground border border-border rounded-lg px-2 py-1 mt-1 bg-white focus:outline-none focus:ring-2 focus:ring-[var(--accent-blue)]"
+										className="w-full text-xs text-muted-foreground border border-border rounded-lg px-2 py-1 mt-1 bg-card focus:outline-none focus:ring-2 focus:ring-[var(--accent-blue)]"
 									/>
 								) : (
 									<div className="text-xs text-muted-foreground">{agent.role}</div>
@@ -171,7 +170,7 @@ const AgentDetailTray: React.FC<AgentDetailTrayProps> = ({ agentId, onClose }) =
 								<select
 									value={editStatus}
 									onChange={(e) => setEditStatus(e.target.value as "idle" | "active" | "blocked")}
-									className="text-[10px] font-bold px-2 py-1 rounded border border-border bg-white focus:outline-none focus:ring-2 focus:ring-[var(--accent-blue)]"
+									className="text-[10px] font-bold px-2 py-1 rounded border border-border bg-card focus:outline-none focus:ring-2 focus:ring-[var(--accent-blue)]"
 								>
 									<option value="active">Active</option>
 									<option value="idle">Idle</option>
@@ -210,7 +209,7 @@ const AgentDetailTray: React.FC<AgentDetailTrayProps> = ({ agentId, onClose }) =
 								<textarea
 									value={editSystemPrompt}
 									onChange={(e) => setEditSystemPrompt(e.target.value)}
-									className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[var(--accent-blue)] focus:border-transparent resize-none"
+									className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-card focus:outline-none focus:ring-2 focus:ring-[var(--accent-blue)] focus:border-transparent resize-none"
 									rows={4}
 								/>
 							) : (
@@ -229,7 +228,7 @@ const AgentDetailTray: React.FC<AgentDetailTrayProps> = ({ agentId, onClose }) =
 								<textarea
 									value={editCharacter}
 									onChange={(e) => setEditCharacter(e.target.value)}
-									className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[var(--accent-blue)] focus:border-transparent resize-none"
+									className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-card focus:outline-none focus:ring-2 focus:ring-[var(--accent-blue)] focus:border-transparent resize-none"
 									rows={4}
 								/>
 							) : (
@@ -248,7 +247,7 @@ const AgentDetailTray: React.FC<AgentDetailTrayProps> = ({ agentId, onClose }) =
 								<textarea
 									value={editLore}
 									onChange={(e) => setEditLore(e.target.value)}
-									className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[var(--accent-blue)] focus:border-transparent resize-none"
+									className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-card focus:outline-none focus:ring-2 focus:ring-[var(--accent-blue)] focus:border-transparent resize-none"
 									rows={4}
 								/>
 							) : (

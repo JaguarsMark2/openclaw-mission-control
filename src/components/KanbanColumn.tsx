@@ -30,7 +30,7 @@ const KanbanColumn: React.FC<KanbanColumnProps> = ({
 				isOver ? "drop-zone-active" : ""
 			}`}
 		>
-			<div className="flex shrink-0 items-center gap-2 px-4 py-3 bg-[#f8f9fa] border-b border-border">
+			<div className="flex shrink-0 items-center gap-2 px-4 py-3 bg-muted border-b border-border">
 				<span
 					className="w-2 h-2 rounded-full"
 					style={{ backgroundColor: column.color }}

@@ -37,7 +37,7 @@ const RightSidebarTabs: React.FC<RightSidebarTabsProps> = ({
           onClick={() => onTabChange(tab.id)}
           className={`flex-1 px-4 py-3 text-[11px] font-bold tracking-widest transition-colors ${
             activeTab === tab.id
-              ? "text-[var(--accent-orange)] border-b-2 border-[var(--accent-orange)] bg-white"
+              ? "text-[var(--accent-orange)] border-b-2 border-[var(--accent-orange)] bg-card"
               : "text-muted-foreground hover:text-foreground bg-muted/30"
           }`}
         >

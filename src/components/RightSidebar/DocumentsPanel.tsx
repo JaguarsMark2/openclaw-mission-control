@@ -1,7 +1,5 @@
-import React, { useState } from "react";
-import { useQuery } from "convex/react";
-import { api } from "../../../convex/_generated/api";
-import { Id } from "../../../convex/_generated/dataModel";
+import React, { useMemo, useState } from "react";
+import { usePBQuery, type Agent, type Document } from "../../lib/pocketbase";
 import { DEFAULT_TENANT_ID } from "../../lib/tenant";
 
 const typeFilters = [
@@ -13,9 +11,9 @@ const typeFilters = [
 ];
 
 type DocumentsPanelProps = {
-  selectedDocumentId: Id<"documents"> | null;
-  onSelectDocument: (id: Id<"documents"> | null) => void;
-  onPreviewDocument: (id: Id<"documents">) => void;
+  selectedDocumentId: string | null;
+  onSelectDocument: (id: string | null) => void;
+  onPreviewDocument: (id: string) => void;
 };
 
 const DocumentsPanel: React.FC<DocumentsPanelProps> = ({
@@ -24,18 +22,47 @@ const DocumentsPanel: React.FC<DocumentsPanelProps> = ({
   onPreviewDocument,
 }) => {
   const [selectedType, setSelectedType] = useState<string>("all");
-  const [selectedAgentId, setSelectedAgentId] = useState<
-    Id<"agents"> | undefined
-  >(undefined);
+  const [selectedAgentId, setSelectedAgentId] = useState<string | undefined>(undefined);
 
-  const documents = useQuery(api.documents.listAll, {
-    tenantId: DEFAULT_TENANT_ID,
-    type: selectedType === "all" ? undefined : selectedType,
-    agentId: selectedAgentId,
+  // Build filter dynamically
+  const documentsOptions = useMemo(() => {
+    const parts: string[] = ["tenantId = {:tid}"];
+    const params: Record<string, string> = { tid: DEFAULT_TENANT_ID };
+
+    if (selectedType !== "all") {
+      parts.push("type = {:type}");
+      params.type = selectedType;
+    }
+    if (selectedAgentId) {
+      parts.push("createdByAgentId = {:agentId}");
+      params.agentId = selectedAgentId;
+    }
+
+    return {
+      filter: parts.join(" && "),
+      filterParams: params,
+      sort: "-created",
+    };
+  }, [selectedType, selectedAgentId]);
+
+  const rawDocuments = usePBQuery<Document>("documents", documentsOptions);
+  const agents = usePBQuery<Agent>("agents", {
+    filter: "tenantId = {:tid}",
+    filterParams: { tid: DEFAULT_TENANT_ID },
   });
-  const agents = useQuery(api.queries.listAgents, { tenantId: DEFAULT_TENANT_ID });
 
-  const handleDocumentClick = (docId: Id<"documents">) => {
+  // Enrich documents with agent info client-side
+  const documents = useMemo(() => {
+    if (!rawDocuments || !agents) return undefined;
+    const agentMap = new Map(agents.map(a => [a.id, a]));
+    return rawDocuments.map(doc => ({
+      ...doc,
+      agentName: doc.createdByAgentId ? agentMap.get(doc.createdByAgentId)?.name : undefined,
+      agentAvatar: doc.createdByAgentId ? agentMap.get(doc.createdByAgentId)?.avatar : undefined,
+    }));
+  }, [rawDocuments, agents]);
+
+  const handleDocumentClick = (docId: string) => {
     if (selectedDocumentId === docId) {
       // Clicking same document again - close trays
       onSelectDocument(null);
@@ -75,15 +102,15 @@ const DocumentsPanel: React.FC<DocumentsPanelProps> = ({
   const getTypeColor = (type: string) => {
     switch (type) {
       case "markdown":
-        return "bg-blue-100 text-blue-700";
+        return "bg-[var(--accent-blue)]/20 text-[var(--accent-blue)]";
       case "code":
-        return "bg-green-100 text-green-700";
+        return "bg-[var(--accent-green)]/20 text-[var(--accent-green)]";
       case "image":
-        return "bg-purple-100 text-purple-700";
+        return "bg-[var(--accent-purple)]/20 text-[var(--accent-purple)]";
       case "note":
-        return "bg-yellow-100 text-yellow-700";
+        return "bg-[var(--accent-yellow)]/20 text-[var(--accent-yellow)]";
       default:
-        return "bg-gray-100 text-gray-700";
+        return "bg-muted text-muted-foreground";
     }
   };
 
@@ -111,20 +138,20 @@ const DocumentsPanel: React.FC<DocumentsPanelProps> = ({
             onClick={() => setSelectedAgentId(undefined)}
             className={`text-[10px] font-semibold px-2.5 py-1 rounded-full border cursor-pointer transition-colors ${
               selectedAgentId === undefined
-                ? "border-[var(--accent-orange)] text-[var(--accent-orange)] bg-white"
-                : "border-border bg-white text-muted-foreground hover:bg-muted/50"
+                ? "border-[var(--accent-orange)] text-[var(--accent-orange)] bg-card"
+                : "border-border bg-card text-muted-foreground hover:bg-muted/50"
             }`}
           >
             All Agents
           </div>
           {agents.slice(0, 8).map((a) => (
             <div
-              key={a._id}
-              onClick={() => setSelectedAgentId(a._id)}
+              key={a.id}
+              onClick={() => setSelectedAgentId(a.id)}
               className={`text-[10px] font-semibold px-2.5 py-1 rounded-full border cursor-pointer flex items-center gap-1 transition-colors ${
-                selectedAgentId === a._id
-                  ? "border-[var(--accent-orange)] text-[var(--accent-orange)] bg-white"
-                  : "border-border bg-white text-muted-foreground hover:bg-muted/50"
+                selectedAgentId === a.id
+                  ? "border-[var(--accent-orange)] text-[var(--accent-orange)] bg-card"
+                  : "border-border bg-card text-muted-foreground hover:bg-muted/50"
               }`}
             >
               {a.name}
@@ -141,10 +168,10 @@ const DocumentsPanel: React.FC<DocumentsPanelProps> = ({
         ) : (
           documents.map((doc) => (
             <div
-              key={doc._id}
-              onClick={() => handleDocumentClick(doc._id)}
+              key={doc.id}
+              onClick={() => handleDocumentClick(doc.id)}
               className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
-                selectedDocumentId === doc._id
+                selectedDocumentId === doc.id
                   ? "bg-[var(--accent-orange)]/10 border-[var(--accent-orange)]"
                   : "bg-secondary border-border hover:bg-muted"
               }`}
@@ -171,7 +198,7 @@ const DocumentsPanel: React.FC<DocumentsPanelProps> = ({
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
-                  onPreviewDocument(doc._id);
+                  onPreviewDocument(doc.id);
                 }}
                 className="shrink-0 text-[10px] font-semibold px-2 py-1 rounded bg-muted hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
               >

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import SignOutButton from "./Signout";
-import { useQuery } from "convex/react";
-import { api } from "../../convex/_generated/api";
+import { usePBQuery } from "../lib/pocketbase";
+import type { Agent, Task } from "../lib/pocketbase";
 import { DEFAULT_TENANT_ID } from "../lib/tenant";
 
 type HeaderProps = {
@@ -11,10 +11,16 @@ type HeaderProps = {
 
 const Header: React.FC<HeaderProps> = ({ onOpenAgents, onOpenLiveFeed }) => {
 	const [time, setTime] = useState(new Date());
-	
+
 	// Fetch data for dynamic counts
-	const agents = useQuery(api.queries.listAgents, { tenantId: DEFAULT_TENANT_ID });
-	const tasks = useQuery(api.queries.listTasks, { tenantId: DEFAULT_TENANT_ID });
+	const agents = usePBQuery<Agent>("agents", {
+		filter: "tenantId = {:tid}",
+		filterParams: { tid: DEFAULT_TENANT_ID },
+	});
+	const tasks = usePBQuery<Task>("tasks", {
+		filter: "tenantId = {:tid}",
+		filterParams: { tid: DEFAULT_TENANT_ID },
+	});
 
 	// Calculate counts
 	const activeAgentsCount = agents ? agents.filter(a => a.status === "active").length : 0;
@@ -45,7 +51,7 @@ const Header: React.FC<HeaderProps> = ({ onOpenAgents, onOpenLiveFeed }) => {
 	};
 
 	return (
-		<header className="[grid-area:header] flex items-center justify-between px-3 md:px-6 bg-white border-b border-border z-10">
+		<header className="[grid-area:header] flex items-center justify-between px-3 md:px-6 bg-card border-b border-border z-10">
 			<div className="flex items-center gap-2 md:gap-4 min-w-0">
 				<div className="flex md:hidden items-center gap-2">
 					<button
@@ -63,8 +69,8 @@ const Header: React.FC<HeaderProps> = ({ onOpenAgents, onOpenLiveFeed }) => {
 						MISSION CONTROL
 					</h1>
 				</div>
-				<div className="hidden sm:block text-xs text-muted-foreground bg-muted px-3 py-1 rounded-full font-medium">
-					SiteName
+				<div className="hidden sm:block text-[10px] font-bold tracking-widest text-muted-foreground bg-muted px-3 py-1 rounded-full">
+					v1.0
 				</div>
 			</div>
 
@@ -105,8 +111,8 @@ const Header: React.FC<HeaderProps> = ({ onOpenAgents, onOpenLiveFeed }) => {
 						{formatDate(time)}
 					</div>
 				</div>
-				<div className="flex items-center gap-2 bg-[#e6fcf5] text-[#0ca678] px-3 py-1.5 rounded-full text-[11px] font-bold tracking-[0.5px]">
-					<span className="w-2 h-2 bg-[#0ca678] rounded-full" />
+				<div className="flex items-center gap-2 bg-[var(--accent-green)]/15 text-[var(--accent-green)] px-3 py-1.5 rounded-full text-[11px] font-bold tracking-[0.5px]">
+					<span className="w-2 h-2 bg-[var(--accent-green)] rounded-full" />
 					ONLINE
 				</div>
 				<SignOutButton />
